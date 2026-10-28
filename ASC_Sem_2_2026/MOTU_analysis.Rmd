@@ -1,0 +1,678 @@
+---
+title: "MOTU_analysis"
+author: "Ned Johnston u7468869"
+date: "2026-10-06"
+output: html_document
+---
+
+```{r, message=F}
+library (tidyverse)
+library(leaflet)
+library(dplyr)
+library(vegan)
+library(iNEXT)
+library(lubridate)
+library(tidyr)
+```
+
+```{r}
+MOTUs <-  read_csv("Data/trap_MOTUs.csv") %>%
+  mutate(Date = dmy(Date))
+```
+
+# Finding number of MOTUs on each day
+
+```{r}
+motus_to_keep <- MOTUs %>%
+  count(Trap, MOTU, name = "Total") %>%
+  pivot_wider(names_from = Trap, values_from = Total, values_fill = 0) %>%
+  filter(T1 >= 5, T3 >= 5) %>%
+  pull(MOTU)
+
+MOTUs_filtered <- MOTUs %>%
+  filter(MOTU %in% motus_to_keep)
+
+
+motu_counts <- MOTUs_filtered %>%
+  count(Trap, Date, MOTU, name = "Count")
+
+motu_matrix <- motu_counts %>%
+  arrange(Trap, Date) %>%                  # chronological within each trap
+  mutate(Trap_Date = paste(Trap, format(Date, "%Y-%m-%d"), sep = "_")) %>%
+  select(MOTU, Trap_Date, Count) %>%
+  pivot_wider(
+    names_from  = Trap_Date,
+    values_from = Count,
+    values_fill = 0
+  ) %>%
+  arrange(MOTU)
+
+motu_matrix
+```
+
+
+
+```{r}
+# Creates a column of just pollinator MOTUs with NA for non-pollinators
+MOTUs$pols <- ifelse(MOTUs$MOTU %in% c(1, 2, 4, 5, 7, 8, 10, 17, 51, 52), MOTUs$MOTU, NA)
+
+# Creates same but with nonpollinators
+MOTUs$nonpol <- ifelse(!MOTUs$MOTU %in% c(1, 2, 4, 5, 7, 8, 10, 17, 51, 52), MOTUs$MOTU, NA)
+```
+
+## Running Chi-squared between number of pollinators in each trap
+```{r}
+   MOTUs$is_pol <- MOTUs$MOTU %in% c(1, 2, 4, 5, 7, 8, 10, 17, 51, 52)
+   tab <- table(MOTUs$Trap, MOTUs$is_pol)
+   tab
+   fisher.test(tab)
+```
+
+## Running Chi-squared to compare MOTU distributions
+```{r}
+# By trap X MOTU
+pols_bytrap <- table(MOTUs$pols, MOTUs$Trap)
+nonpols_bytrap <- table(MOTUs$nonpol, MOTUs$Trap)
+pols_bytrap
+nonpols_bytrap
+```
+
+```{r}
+# Running Fisher Tests:
+fisher.test(pols_bytrap, simulate.p.value = TRUE, B = 1e5)
+chisq.test(pols_bytrap, simulate.p.value = TRUE, B = 1e5)
+
+fisher.test(nonpols_bytrap, simulate.p.value = TRUE, B = 1e5)
+chisq.test(nonpols_bytrap, simulate.p.value = TRUE, B = 1e5)
+```
+```{r}
+# By Date X MOTU
+pols_bydate <- table(MOTUs$pols, MOTUs$Date)
+nonpols_bydate <- table(MOTUs$nonpol, MOTUs$Date)
+pols_bydate
+nonpols_bydate
+```
+
+```{r}
+# Running fisher tests
+fisher.test(pols_bydate, simulate.p.value = TRUE, B = 1e5)
+chisq.test(pols_bydate, simulate.p.value = TRUE, B = 1e5)
+
+fisher.test(nonpols_bydate, simulate.p.value = TRUE, B = 1e5)
+chisq.test(nonpols_bydate, simulate.p.value = TRUE, B = 1e5)
+```
+
+# Calculated true number of MOTUs (Chao1)
+
+```{r}
+BOLD_coords <- read.csv("Data/motu_coords.csv")
+```
+
+
+```{r}
+# Creation of abundance matrix
+motu_matrix <- table(MOTUs$MOTU)
+```
+
+```{r}
+# Running Chao1 
+estimateR(motu_matrix) 
+```
+
+The Chao1 MOTU estimate is 64 (10.99 SE)
+
+```{r}
+# Calculating shannon and simpson diversity index
+shan_ind <- diversity(motu_matrix, index = "shannon")
+simp_ind <- diversity(motu_matrix, index = "simpson")
+```
+
+```{r}
+shan_hill <- exp(shan_ind)
+simp_hill <- exp(simp_ind)
+```
+
+
+# Creating rarefaction curve
+
+```{r}
+library(vegan)
+library(iNEXT)
+library(ggplot2)
+```
+```{r}
+# ---- Data ----
+dat <- read_csv("Data/trap_MOTUs.csv", show_col_types = FALSE)
+x <- dat |> count(MOTU, name = "total") |> arrange(desc(total)) |> pull(total)
+
+n_end <- 2 * sum(x)   # 954 = 2 x observed sample size
+
+# ---- iNEXT: extrapolate to exactly 2x the sample size ----
+out <- iNEXT(x, q = c(0, 1, 2), datatype = "abundance",
+             endpoint = n_end, nboot = 200)
+
+```
+
+```{r}
+out$AsyEst
+```
+
+```{r}
+p <- ggiNEXT(out, type = 1, facet.var = "None", color.var = "Order.q") +
+  facet_wrap(~ Order.q,
+             labeller = as_labeller(c("0" = "Species richness",
+                                      "1" = "Shannon Hill",
+                                      "2" = "Simpson Hill"))) +
+  scale_colour_manual(values = c("#D95F02", "#2C7BB6", "#7B3294")) +
+  scale_fill_manual(values = c("#D95F02", "#2C7BB6", "#7B3294")) +
+  scale_x_continuous(breaks = c(0, 250, 500, 750, n_end)) +
+  labs(x = "Number of individuals", y = "Species diversity") +
+  theme_grey(base_size = 18) +
+  theme(legend.position = "none",
+        aspect.ratio = 1.1,                 # panel height / width
+        panel.spacing = unit(0.6, "lines"),
+        plot.margin = margin(5, 20, 5, 5))
+
+p
+```
+
+# POllinator only diversity
+
+```{r}
+library(iNEXT)
+library(ggplot2)
+```
+
+```{r}
+dat <- read.csv("Data/trap_MOTUs.csv")
+
+# pollinator dataset: MOTU ID + abundance (drop the empty rows)
+poll <- na.omit(dat[, c("pollinator_MOTUs", "pollinator_MOTUs_count")])
+poll_abund <- poll$pollinator_MOTUs_count
+names(poll_abund) <- poll$pollinator_MOTUs
+
+sum(poll_abund)   # should be 40
+```
+
+```{r}
+# Chao1 species richness only (q = 0); default endpoint (2 x sample size = 80)
+poll_rarefaction <- iNEXT(poll_abund,
+                          q = 0,
+                          datatype = "abundance",
+                          nboot = 100)
+
+poll_rarefaction$AsyEst   # "Species Richness" row = Chao1 estimate
+```
+
+```{r}
+ggiNEXT(poll_rarefaction, type = 1, color.var = "Order.q") +
+  scale_colour_manual(values = "orange") +
+  scale_fill_manual(values = "orange") +
+  labs(title = "Chao1 Species Richness",
+       x = "Number of individuals",
+       y = "Number of MOTUs") +
+  theme(legend.position = "none")
+```
+
+```{r}
+
+poll <- na.omit(dat[, c("pollinator_MOTUs", "pollinator_MOTUs_count")])
+
+ggplot(data = poll,
+       aes(x = reorder(factor(pollinator_MOTUs), -pollinator_MOTUs_count), y = pollinator_MOTUs_count)) +
+  geom_col(fill = "grey") +
+  labs(title = "MOTU abundance in sequenced pollinators",
+       x = "Pollinator MOTU",
+       y = "Abundance (number of individuals)") +
+  geom_text(aes(label = pollinator_MOTUs_count), vjust = -0.5) +
+  theme_classic() +
+  theme(axis.title = element_text(size = 16),
+        axis.text = element_text(size = 14),
+        plot.title = element_text(size = 20)
+  )
+```
+
+
+# Creating leaflet plot of BOLD records
+
+```{r}
+BOLD_coords <- read.csv("Data/motu_coords.csv")
+```
+
+```{r}
+# Swaps negatives in 
+BOLD_coords <- BOLD_coords |>
+  mutate(
+    lat = if_else(BOLD_MOTU == 10, -abs(lat), lat),
+    lon = if_else(BOLD_MOTU == 10,  abs(lon), lon)
+  )
+```
+
+```{r}
+# Assigns colour per MOTU
+motu_cols <- c("1"  = "red", "2"  = "orange", "4"  = "green", "5"  = "cyan", "8"  = "purple", "10" = "orchid","17" = "pink", "51" = "darkgreen", "52" = "brown"
+)
+```
+
+```{r}
+leaflet() |>
+  addProviderTiles(providers$CartoDB.Positron) |>
+  
+  addCircleMarkers(
+    data = filter(BOLD_coords, BOLD_MOTU == 1),
+    lng = ~lon, lat = ~lat,
+    color = motu_cols[[as.character(1)]], fillOpacity = 0.7
+  ) |>
+  addCircleMarkers(
+    data = filter(BOLD_coords, BOLD_MOTU == 2),
+    lng = ~lon, lat = ~lat,
+    color = motu_cols[[as.character(2)]], fillOpacity = 0.7
+  ) |>
+  addCircleMarkers(
+    data = filter(BOLD_coords, BOLD_MOTU == 4),
+    lng = ~lon, lat = ~lat,
+    color = motu_cols[[as.character(4)]], fillOpacity = 0.7
+  ) |>
+  addCircleMarkers(
+    data = filter(BOLD_coords, BOLD_MOTU == 5),
+    lng = ~lon, lat = ~lat,
+    color = motu_cols[[as.character(5)]], fillOpacity = 0.7
+  ) |>
+  addCircleMarkers(
+    data = filter(BOLD_coords, BOLD_MOTU == 8),
+    lng = ~lon, lat = ~lat,
+    color = motu_cols[[as.character(8)]], fillOpacity = 0.7
+  ) |>
+  addCircleMarkers(
+    data = filter(BOLD_coords, BOLD_MOTU == 10),
+    lng = ~lon, lat = ~lat,
+    color = motu_cols[[as.character(10)]], fillOpacity = 0.7
+  ) |>
+  addCircleMarkers(
+    data = filter(BOLD_coords, BOLD_MOTU == 17),
+    lng = ~lon, lat = ~lat,
+    color = motu_cols[[as.character(17)]], fillOpacity = 0.7
+  ) |>
+  addCircleMarkers(
+    data = filter(BOLD_coords, BOLD_MOTU == 51),
+    lng = ~lon, lat = ~lat,
+    color = motu_cols[[as.character(51)]], fillOpacity = 0.7
+  ) |>
+  addCircleMarkers(
+    data = filter(BOLD_coords, BOLD_MOTU == 52),
+    lng = ~lon, lat = ~lat,
+    color = motu_cols[[as.character(52)]], fillOpacity = 0.7
+  ) 
+
+```
+
+```{r}
+library(ozmaps)
+library(sf)
+aus <- ozmaps::ozmap_states
+```
+```{r}
+# Assigns colour per MOTU
+motu_cols <- c("1"  = "red", "2"  = "orange", "4"  = "green", "5"  = "cyan", "8"  = "purple", "10" = "orchid","17" = "pink", "51" = "darkgreen", "52" = "brown"
+)
+```
+
+```{r}
+# Assigns colour per MOTU
+motu_cols <- c("1"  = "red", "2"  = "red", "4"  = "red", "5"  = "red", "8"  = "red", "10" = "red","17" = "red", "51" = "red", "52" = "red"
+)
+```
+
+
+```{r}
+motu_sf <- st_as_sf(BOLD_coords, coords = c("lon", "lat"), crs = 4326) |>
+  st_transform(st_crs(aus))
+
+motu_sf <- motu_sf %>%
+  mutate(BOLD_MOTU = factor(BOLD_MOTU))
+
+BOLD_coords <- BOLD_coords |>
+  mutate(
+    BOLD_MOTU = factor(BOLD_MOTU)
+  )
+```
+
+
+```{r}
+ggplot() +
+  geom_sf(data = aus, fill = NA, colour = "grey40", linewidth = 0.2) +
+  geom_sf(
+    data = motu_sf,
+    aes(colour = BOLD_MOTU),
+    shape = 16, size = 1.5, alpha = 0.8
+  ) +
+  scale_colour_manual(values = motu_cols, guide = "none") +
+  facet_wrap(~BOLD_MOTU, ncol = 3, labeller = labeller(BOLD_MOTU = function(x) paste("MOTU", x))) +
+  coord_sf(xlim = c(112, 155), ylim = c(-44, -9), expand = FALSE) +
+  labs(
+    title    = "MOTU sample locations",
+    subtitle = "One panel per MOTU"
+  ) +
+  theme(
+    plot.title       = element_text(face = "bold", size = 13),
+    plot.subtitle    = element_text(colour = "grey30", size = 9),
+    strip.text       = element_text(face = "bold", size = 10),
+    strip.background = element_rect(fill = "grey95", colour = NA),
+    plot.background  = element_rect(fill = "white", colour = NA),
+    panel.background = element_rect(fill = "white", colour = NA),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text        = element_blank(),
+    axis.ticks       = element_blank()
+  )
+```
+
+# Trap level sex bias
+
+```{r}
+female <- read_csv("Data/trap_female_proportion.csv")
+```
+
+
+
+```{r}
+# Makes dates as date format and makes trap a factor
+female <- read_csv("Data/trap_female_proportion.csv") %>%
+  mutate(
+    date  = dmy(date),
+    trap  = factor(trap),
+    total = n_female + n_male,
+    
+    # 95% Wilson CIs for each trap x date proportion
+    ci    = map2(n_female, total, ~ prop.test(.x, .y, correct = FALSE)$conf.int),
+    lower = map_dbl(ci, 1),
+    upper = map_dbl(ci, 2)
+  )
+```
+
+```{r}
+# T1 vs T3 within each date: Fisher's exact test, Holm-adjusted
+tests <- female %>%
+  group_by(date) %>%
+  summarise(
+    p    = fisher.test(matrix(c(n_female, n_male), ncol = 2))$p.value,
+    ymax = max(upper),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    p_adj = p.adjust(p, method = "holm"),
+    stars = case_when(
+      p_adj < 0.001 ~ "***",
+      p_adj < 0.01  ~ "**",
+      p_adj < 0.05  ~ "*",
+      TRUE          ~ "ns"
+    ),
+    x       = as.numeric(factor(date)),  # position on the discrete x axis
+    bracket = ymax + 0.04
+  )
+
+```
+
+```{r}
+ggplot(female, aes(x = factor(date), y = prop_female, fill = trap)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  geom_errorbar(aes(ymin = lower, ymax = upper),
+                position = position_dodge(width = 0.8), width = 0.2) +
+  # significance brackets and stars
+  geom_segment(data = tests, inherit.aes = FALSE,
+               aes(x = x - 0.2, xend = x + 0.2, y = bracket, yend = bracket)) +
+  geom_text(data = tests, inherit.aes = FALSE,
+            aes(x = x, y = bracket, label = stars),
+            vjust = -0.3, size = 5) +
+  scale_x_discrete(labels = function(x) format(as.Date(x), "%d %b %Y")) +
+  scale_y_continuous(limits = c(0, 1.1), breaks = seq(0, 1, 0.25),
+                     expand = c(0, 0)) +
+  scale_fill_manual(values = c("T1" = "#2C7BB6", "T3" = "#D95F02")) +
+  labs(
+    x = "Date",
+    y = "Proportion of female phorids",
+    fill = "Trap",
+    caption = "Error bars: 95% Wilson CIs. Stars: Fisher's exact test, T1 vs T3, Holm-adjusted.\n** p < 0.01, *** p < 0.001, ns = not significant."
+  ) +
+  theme_classic(base_size = 14)
+```
+
+# Comparison of proportion of pollinating phorids between T1 and T3 over time
+
+```{r}
+library(binom)
+```
+
+```{r}
+dat <- read_csv("Data/trap_MOTUs.csv")
+```
+
+```{r}
+# Pollinator reference list (drop the blank column)
+pollinator_ids <- dat$pollinator_MOTUs |> na.omit() |> unique()
+
+obs <- dat |>
+  select(Trap, Date, MOTU) |>
+  mutate(
+    Date = factor(dmy(Date),
+                  levels = sort(unique(dmy(Date))),
+                  labels = format(sort(unique(dmy(Date))), "%d %b %Y")),
+    Trap = factor(Trap),
+    pollinator = MOTU %in% pollinator_ids
+  )
+```
+
+```{r}
+# ---- 2. Proportions with 95% Wilson CIs ----
+summ <- obs |>
+  group_by(Date, Trap) |>
+  summarise(n_poll = sum(pollinator), n = n(), .groups = "drop") |>
+  mutate(
+    prop  = n_poll / n,
+    lower = binom.wilson(n_poll, n)$lower,
+    upper = binom.wilson(n_poll, n)$upper
+  )
+print(summ)
+```
+
+```{r}
+trap_tests <- obs |>
+  group_by(Date) |>
+  summarise(p = fisher.test(table(Trap, pollinator))$p.value, .groups = "drop") |>
+  mutate(p_adj = p.adjust(p, method = "holm"),
+         label = case_when(p_adj < 0.001 ~ "***",
+                           p_adj < 0.01  ~ "**",
+                           p_adj < 0.05  ~ "*",
+                           TRUE ~ "ns"))
+print(trap_tests)
+```
+
+```{r}
+brackets <- summ |>
+  group_by(Date) |>
+  summarise(y = max(upper) + 0.05, .groups = "drop") |>
+  left_join(trap_tests, by = "Date") |>
+  mutate(xnum = as.numeric(Date),
+         xmin = xnum - 0.225, xmax = xnum + 0.225)
+
+p <- ggplot(summ, aes(Date, prop, fill = Trap)) +
+  geom_col(position = position_dodge(width = 0.9), width = 0.85) +
+  geom_errorbar(aes(ymin = lower, ymax = upper),
+                position = position_dodge(width = 0.9), width = 0.2, linewidth = 0.6) +
+  geom_segment(data = brackets, inherit.aes = FALSE,
+               aes(x = xmin, xend = xmax, y = y, yend = y)) +
+  geom_text(data = brackets, inherit.aes = FALSE,
+            aes(x = xnum, y = y + 0.03, label = label), size = 5) +
+  scale_fill_manual(values = c(T1 = "#2C7BB6", T3 = "#D95F02")) +
+  scale_y_continuous(limits = c(0, 1.1), breaks = seq(0, 1, 0.25),
+                     expand = c(0, 0)) +
+labs(x = "Date",
+     y = "Proportion of phorids that\nare in pollinating MOTUs",
+     caption = paste0("Error bars: 95% Wilson CIs. Stars: Fisher's exact test, ",
+                      "T1 vs T3, Holm-adjusted.\n",
+                      "* p < 0.05, ** p < 0.01, *** p < 0.001, ns = not significant.")) +
+  theme_classic(base_size = 14) +
+  theme(plot.caption = element_text(hjust = 0.5, size = 10))
+
+p
+```
+# Created plot of T1 flowering
+
+```{r}
+# --- Read data -------------------------------------------------------------
+dat <- read_csv("Data/t1_openflowers.csv")
+dat$end <- as.Date(trimws(dat$Date), format = "%d/%m/%Y")
+```
+
+```{r}
+# The first record has no earlier date, so give its column a start date.
+# (18 Mar matches your example image - change if needed.)
+first_start <- as.Date("2026-03-18")
+
+dat <- dat %>%
+  arrange(end) %>%
+  mutate(
+    start = lag(end, default = first_start),
+    mid   = start + (end - start) / 2
+  )
+
+```
+
+```{r}
+# --- Columns to annotate with a red arrow ----------------------------------
+# (columns ending on 25 Mar, 10 Apr and 11 May = 22-25 Mar, 6-10 Apr, 4-11 May)
+arrows <- dat %>%
+  filter(end %in% as.Date(c("2026-03-25", "2026-04-10", "2026-05-11"))) %>%
+  mutate(
+    arrow_top    = open_flowers + 3,    # arrow tail (data units)
+    arrow_bottom = open_flowers + 0.5   # arrow tip, just above the column
+  )
+
+# --- X-axis breaks at the edges of the columns -----------------------------
+brks <- sort(unique(c(dat$start, dat$end)))
+
+```
+
+```{r}
+# --- Plot ------------------------------------------------------------------
+ggplot(dat) +
+  geom_rect(aes(xmin = start, xmax = end, ymin = 0, ymax = open_flowers),
+            fill = "darkgreen", colour = "white", linewidth = 0.6) +
+  geom_segment(data = arrows,
+               aes(x = mid, xend = mid, y = arrow_top, yend = arrow_bottom),
+               colour = "red", linewidth = 1,
+               arrow = arrow(length = unit(0.25, "cm"), type = "closed")) +
+  scale_x_date(breaks = brks, labels = format(brks, "%d %b"),
+               expand = expansion(mult = 0.01)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  labs(x = NULL, y = "Number of open flowers") +
+  theme_classic(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+```
+
+# MOTU abundance graph
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+# ---- Read data ----
+dat <- read_csv("Data/trap_MOTUs.csv", show_col_types = FALSE)
+
+pollinator_ids <- c(1, 2, 4, 5, 7, 8, 10, 17)
+
+# ---- Total abundance of each MOTU, ordered highest to lowest ----
+abund <- dat |>
+  count(MOTU, name = "total") |>
+  mutate(type = if_else(MOTU %in% pollinator_ids, "Pollinator", "Non-pollinator"),
+         MOTU = fct_reorder(factor(MOTU), total, .desc = TRUE))
+
+# ---- Plot ----
+ggplot(abund, aes(x = MOTU, y = total, fill = type)) +
+  geom_col(width = 0.8) +
+  geom_hline(yintercept = 5, linetype = "dotted", linewidth = 0.7) +
+  annotate("text", x = Inf, y = 5, label = "n = 5", hjust = 1.1, vjust = -0.5, size = 4)+
+  scale_fill_manual(values = c("Pollinator" = "#D95F02",
+                               "Non-pollinator" = "grey60")) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  labs(x = "MOTU", y = "Total abundance (T1 + T3)", fill = NULL) +
+  theme_classic(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 9))
+```
+
+# Change in MOTU over time
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+dat <- read.csv("Data/trap_MOTUs.csv")
+
+counts <- dat %>%
+  select(Trap, Date, MOTU) %>%
+  mutate(Date = as.Date(Date, format = "%d/%m/%Y")) %>%
+  count(MOTU, Trap, Date, name = "abundance") %>%
+  complete(MOTU, Trap, Date, fill = list(abundance = 0))
+
+keep <- counts %>%
+  group_by(MOTU, Trap) %>%
+  summarise(total = sum(abundance), .groups = "drop") %>%
+  pivot_wider(names_from = Trap, values_from = total) %>%
+  filter(T1 >= 5, T3 >= 5)
+
+motu_levels <- sort(keep$MOTU)
+
+plot_data <- counts %>%
+  filter(MOTU %in% motu_levels) %>%
+  mutate(MOTU = factor(MOTU, levels = motu_levels,
+                       labels = paste("MOTU", motu_levels)))
+
+# checks: expect 54 rows, 0 missing dates, 0 missing abundances
+nrow(plot_data)
+sum(is.na(plot_data$Date))
+sum(is.na(plot_data$abundance))
+```
+
+```{r}
+ggplot(plot_data,
+       aes(x = Date, y = abundance,
+           colour = MOTU, shape = Trap, linetype = Trap,
+           group = Trap)) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 2.5) +
+  facet_wrap(~MOTU, nrow = 3, ncol = 3) +
+  scale_colour_manual(
+  values = c("#E41A1C",  # red
+             "#377EB8",  # blue
+             "#4DAF4A",  # green
+             "#984EA3",  # purple
+             "#FF7F00",  # orange
+             "#B8860B",  # dark
+             "#A65628",  # brown
+             "#F781BF",  # pink
+             "#999999"), # grey
+  guide = "none") +
+  scale_shape_manual(values = c("T1" = 16, "T3" = 17)) +
+  scale_linetype_manual(values = c("T1" = "solid", "T3" = "dashed")) +
+  scale_x_date(breaks = sort(unique(plot_data$Date)),
+               date_labels = "%d %b") +
+  labs(title = "Change in MOTU abundance over time",
+       x = "Collection date",
+       y = "Abundance (number of individuals)") +
+  theme_classic() +
+  theme(plot.title = element_text(size = 16, face = "bold"),
+        axis.title = element_text(size = 20),
+        axis.text = element_text(size = 10),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        strip.background = element_rect(fill = "grey90", colour = NA),
+        strip.text = element_text(size = 12, face = "bold"),
+        panel.spacing = unit(1, "lines"),
+        legend.position = "bottom",
+        legend.title = element_text(size = 12),
+        legend.text = element_text(size = 11),
+        legend.key.width = unit(1.2, "cm"))
+
+ggsave("motu_abundance.png", width = 9, height = 11, dpi = 300)
+```
+
