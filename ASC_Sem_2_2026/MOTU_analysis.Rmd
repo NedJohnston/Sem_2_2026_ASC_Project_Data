@@ -5,6 +5,18 @@ date: "2026-10-06"
 output: html_document
 ---
 
+---
+
+Note: the code in this file was constructed with the assistance of Claude AI.
+
+https://claude.ai/chat/7df811db-d209-454e-819b-698903e45d5f
+https://claude.ai/chat/69fff1b3-de72-494d-9b50-b293ca28956b
+https://claude.ai/chat/0dd5a25f-55a5-4ee9-a053-fa9b3f6d5a20
+https://claude.ai/chat/a1f21c84-6c6d-4c48-a504-663f52aee9ba
+https://claude.ai/chat/ce78eed7-7391-4d1a-a139-0ccd7d9fdef4
+https://claude.ai/chat/dfbabfc4-3c71-4b22-b9f6-80a2598d5b9c
+
+
 ```{r, message=F}
 library (tidyverse)
 library(leaflet)
